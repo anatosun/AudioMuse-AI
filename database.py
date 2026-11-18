@@ -2065,6 +2065,10 @@ def init_db():
             )
             cur.execute("ALTER TABLE music_servers DROP COLUMN IF EXISTS enabled")
             _ensure_column(cur, 'music_servers', 'track_count', 'track_count INTEGER')
+            _ensure_column(
+                cur, 'music_servers', 'playlist_users',
+                "playlist_users JSONB NOT NULL DEFAULT '[]'::jsonb",
+            )
             cur.execute("SAVEPOINT ms_unique_name")
             try:
                 cur.execute(

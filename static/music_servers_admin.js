@@ -341,6 +341,84 @@
         return b;
     }
 
+    var usersServerId = null;
+
+    function hideUsersPanel() {
+        usersServerId = null;
+        el('ms-users-panel').style.display = 'none';
+    }
+
+    function usersMessage(text) {
+        var list = el('ms-users-list');
+        list.innerHTML = '';
+        var p = document.createElement('p');
+        p.style.margin = '0';
+        p.textContent = text;
+        list.appendChild(p);
+    }
+
+    function renderUserBoxes(users, selected) {
+        var list = el('ms-users-list');
+        list.innerHTML = '';
+        var chosen = {};
+        selected.forEach(function (u) { chosen[u.id] = true; });
+        users.forEach(function (u) {
+            var label = document.createElement('label');
+            label.style.display = 'flex';
+            label.style.alignItems = 'center';
+            label.style.gap = '0.5rem';
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.setAttribute('data-user-id', u.id);
+            cb.setAttribute('data-user-name', u.name);
+            cb.checked = !!chosen[u.id];
+            label.appendChild(cb);
+            label.appendChild(document.createTextNode(u.name));
+            list.appendChild(label);
+        });
+    }
+
+    function showPlaylistUsers(server) {
+        usersServerId = server.server_id;
+        el('ms-users-panel').style.display = 'block';
+        el('ms-users-title').textContent = 'Playlist users of ' + server.name;
+        el('ms-users-save-btn').style.display = 'none';
+        feedback(el('ms-users-note'), '', true);
+        feedback(el('ms-users-feedback'), '', true);
+        usersMessage('Loading users...');
+        fetch('/api/servers/' + encodeURIComponent(server.server_id) + '/users', { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json().catch(function () { return null; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+            .then(function (res) {
+                if (usersServerId !== server.server_id) { return; }
+                var d = res.d || {};
+                if (!res.ok) { usersMessage(apiErrorText(d, 'The users could not be loaded.')); return; }
+                if (!d.supported) { usersMessage('Per-user playlists are available on Jellyfin, Emby and Navidrome.'); return; }
+                if (!d.admin) { usersMessage(d.error || 'The configured account is not an admin on this server, so per-user playlists are off.'); return; }
+                if (!d.listening) {
+                    feedback(el('ms-users-note'), 'This server does not show other users\' play counts to the admin. Each chosen user gets every clustering playlist and an Album of the Week from a random seed; the Sonic Fingerprint stays shared.', true);
+                }
+                renderUserBoxes(d.users || [], d.selected || []);
+                el('ms-users-save-btn').style.display = '';
+            })
+            .catch(function () { usersMessage('The users could not be loaded.'); });
+    }
+
+    function savePlaylistUsers() {
+        if (!usersServerId) { return; }
+        var users = [];
+        el('ms-users-list').querySelectorAll('input[data-user-id]').forEach(function (cb) {
+            if (cb.checked) { users.push({ id: cb.getAttribute('data-user-id'), name: cb.getAttribute('data-user-name') }); }
+        });
+        jsonPost('/api/servers/' + encodeURIComponent(usersServerId), { playlist_users: users }, 'PUT')
+            .then(function (r) { return r.json().catch(function () { return null; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+            .then(function (res) {
+                if (!res.ok) { feedback(el('ms-users-feedback'), apiErrorText(res.d, 'Save failed.'), false); return; }
+                feedback(el('ms-users-feedback'), users.length ? 'Saved. The next runs create playlists for ' + users.length + ' user(s).' : 'Saved. The next runs create one shared set.', true);
+                loadServers();
+            })
+            .catch(function () { feedback(el('ms-users-feedback'), 'Save failed.', false); });
+    }
+
     function renderTable(data) {
         var tbody = el('music-servers-tbody');
         tbody.innerHTML = '';
@@ -365,6 +443,7 @@
 
             var actions = document.createElement('div');
             actions.style.whiteSpace = 'nowrap';
+            actions.appendChild(actionButton('Playlist users', function () { showPlaylistUsers(s); }));
             if (s.is_default) {
                 actions.appendChild(actionButton('Edit', showDefaultEditor));
             } else {
@@ -618,6 +697,8 @@
     el('ms-save-btn').addEventListener('click', save);
     el('ms-test-btn').addEventListener('click', test);
     el('ms-cancel-btn').addEventListener('click', hideRegistryForm);
+    el('ms-users-save-btn').addEventListener('click', savePlaylistUsers);
+    el('ms-users-cancel-btn').addEventListener('click', hideUsersPanel);
 
     resetForm();
     hideRegistryForm();

@@ -1099,7 +1099,7 @@ class TestTheInlinePlaylistRowIsWatchedAndBeatsInsideTheStaleSweep:
         ):
             summary = task_run.run_playlist_task_per_server(
                 'sonic_fingerprint', 'sonic fingerprint', 'Name', 'Sonic Fingerprint',
-                lambda: ['a'], 'all', 'inline-row-1',
+                lambda _personal: ['a'], 'all', 'inline-row-1',
             )
 
         assert summary['playlists_created'] == 1

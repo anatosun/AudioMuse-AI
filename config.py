@@ -372,6 +372,10 @@ USE_GPU_CLUSTERING = os.environ.get("USE_GPU_CLUSTERING", "False").lower() == "t
 # Set to False to keep the playlists of earlier runs.
 CLUSTERING_CLEANING = os.environ.get("CLUSTERING_CLEANING", "True").lower() == "true"
 
+# --- Per-user playlists ---
+# When users are chosen for a media server (Setup -> Music servers -> Playlist users) and its configured account is an admin there, each chosen user gets their own clustering playlists, Sonic Fingerprint and Album of the Week. Where the server reports each user's play counts (Jellyfin, Emby), a user gets the PER_USER_CLUSTERING_PLAYLISTS clustering playlists closest to their most-played songs.
+PER_USER_CLUSTERING_PLAYLISTS = int(os.environ.get("PER_USER_CLUSTERING_PLAYLISTS", "5"))
+
 # When True, AI playlist naming also avoids names used in previous clustering runs
 # (playlist_name_history + existing playlists on the server).
 # Default False: only names created within the current run are avoided.

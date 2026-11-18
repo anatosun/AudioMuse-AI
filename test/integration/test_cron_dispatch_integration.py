@@ -544,7 +544,7 @@ class TestTheInlineScaffoldWatchesItsOwnRow:
 
         seen = {}
 
-        def build_ids():
+        def build_ids(_personal):
             before = stamp()
             time.sleep(0.6)
             cron_db.commit()

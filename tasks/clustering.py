@@ -115,7 +115,10 @@ from .mediaserver import (
     automatic_playlist_description,
     create_playlist,
     delete_automatic_playlists,
+    playlist_user_scope,
+    playlist_users_for,
 )
+from .playlist_users import playlist_centroids, playlists_for_user
 from .mediaserver import registry
 from sklearn.neighbors import NearestNeighbors
 
@@ -1308,32 +1311,8 @@ def _cluster_one_server_impl(
             f"creating {len(final_playlists_with_details)} playlists on {server_name}"
         )
         report(f"Creating {len(final_playlists_with_details)} playlists on this server...", 96)
-        description = automatic_playlist_description()
         with registry.bind(target_server):
-            if CLUSTERING_CLEANING:
-                delete_automatic_playlists(
-                    get_playlist_names(target_server['server_id'] if target_server else None)
-                )
-            for name, songs_with_details in final_playlists_with_details.items():
-                item_ids = [item_id for item_id, _, _ in songs_with_details]
-                try:
-                    create_playlist(name, item_ids, description=description)
-                except PlaylistIdTranslationError:
-                    logger.exception(
-                        "PLAYLIST CREATION ABORTED on server '%s': the id "
-                        "translation infrastructure failed while creating '%s'. "
-                        "This is NOT an availability skip; failing the task.",
-                        server_name,
-                        name,
-                    )
-                    raise
-                except ValueError:
-                    logger.warning(
-                        "Playlist '%s' skipped on server '%s': none of its "
-                        "tracks are available there.",
-                        name,
-                        server_name,
-                    )
+            _publish_playlists(final_playlists_with_details, target_server, server_name)
 
     return 'success', {
         'playlists': final_playlists_with_details,
@@ -1341,6 +1320,54 @@ def _cluster_one_server_impl(
         'best_params': (state['best_result'] or {}).get('parameters'),
         'calibrated_params': calibrated_summary,
     }
+
+
+def _create_playlists(playlists, description, server_name):
+    for name, songs_with_details in playlists.items():
+        item_ids = [item_id for item_id, _, _ in songs_with_details]
+        try:
+            create_playlist(name, item_ids, description=description)
+        except PlaylistIdTranslationError:
+            logger.exception(
+                "PLAYLIST CREATION ABORTED on server '%s': the id "
+                "translation infrastructure failed while creating '%s'. "
+                "This is NOT an availability skip; failing the task.",
+                server_name,
+                name,
+            )
+            raise
+        except ValueError:
+            logger.warning(
+                "Playlist '%s' skipped on server '%s': none of its "
+                "tracks are available there.",
+                name,
+                server_name,
+            )
+
+
+def _publish_playlists(playlists, target_server, server_name):
+    """Replace the previous run's playlists on the bound server.
+
+    Without chosen users, the configured account gets every playlist. With chosen users, each user gets their own copies instead: on a server that reports each user's play counts, the playlists closest to the user's most-played songs, otherwise every playlist.
+    """
+    description = automatic_playlist_description()
+    last_run_names = get_playlist_names(target_server['server_id'] if target_server else None)
+    if CLUSTERING_CLEANING:
+        delete_automatic_playlists(last_run_names)
+    users, listening = playlist_users_for(target_server)
+    if not users:
+        _create_playlists(playlists, description, server_name)
+        return
+    centroids = playlist_centroids(playlists) if listening else {}
+    for user in users:
+        with playlist_user_scope(user):
+            picked = playlists_for_user(playlists, centroids) if listening else playlists
+            if CLUSTERING_CLEANING:
+                delete_automatic_playlists(last_run_names)
+            logger.info(
+                "Creating %d playlists for user '%s' on server '%s'.", len(picked), user['name'], server_name
+            )
+            _create_playlists(picked, description, server_name)
 
 
 def _prepare_genre_map(lightweight_rows):

@@ -292,10 +292,15 @@ def _playlist_heartbeat_cadence(inline):
 
 
 def run_playlist_task_per_server(task_type, label, playlist_name, fallback_name,
-                                 build_ids, server_scope="all", inline_task_id=None):
+                                 build_ids, server_scope="all", inline_task_id=None,
+                                 needs_listening=False):
+    """Build and upsert one scheduled playlist on every server in scope.
+
+    ``build_ids(personal)`` returns the catalogue ids of the playlist; ``personal`` is true when it runs for one user whose play counts the server reports. On a server with users chosen for per-user playlists, every chosen user gets their own playlist. With ``needs_listening`` the per-user playlists are made only where the server reports each user's play counts; elsewhere the configured account gets one shared playlist.
+    """
     from flask_app import app
 
-    from .mediaserver import create_or_replace_playlist
+    from .mediaserver import create_or_replace_playlist, playlist_user_scope, playlist_users_for
     from .ivf_manager import create_playlist_from_ids
 
     with app.app_context():
@@ -309,35 +314,48 @@ def run_playlist_task_per_server(task_type, label, playlist_name, fallback_name,
         created = [0]
         current = ['resolving the server scope']
 
-        def build(_server, server_name):
+        def upsert(track_ids, where):
+            if not track_ids:
+                logger.warning(
+                    "The %s came out empty for %s; preserving the previous playlist.",
+                    label, where,
+                )
+                return None
+            try:
+                if create_or_replace_playlist(playlist_name, track_ids) is None:
+                    raise RuntimeError(
+                        f"Media server reported failure upserting the {label} playlist"
+                    )
+                name = playlist_name
+            except NotImplementedError:
+                name = f"{fallback_name} (Cron {time.strftime('%Y-%m-%d')})"
+                create_playlist_from_ids(name, track_ids)
+            created[0] += 1
+            logger.info(
+                "The %s playlist '%s' was upserted for %s with %d tracks.",
+                label, name, where, len(track_ids),
+            )
+            return name
+
+        def build(server, server_name):
             current[0] = f"the {label} for {server_name}"
             with row_heartbeat(
                 watched_task_id, lambda: current[0],
                 every_minutes=every_minutes,
                 stop_after_minutes=stop_after_minutes,
             ):
-                track_ids = build_ids()
-                if not track_ids:
-                    logger.warning(
-                        "The %s came out empty on %s; preserving the previous playlist.",
-                        label, server_name,
-                    )
-                    return None
-                try:
-                    if create_or_replace_playlist(playlist_name, track_ids) is None:
-                        raise RuntimeError(
-                            f"Media server reported failure upserting the {label} playlist"
-                        )
-                    name = playlist_name
-                except NotImplementedError:
-                    name = f"{fallback_name} (Cron {time.strftime('%Y-%m-%d')})"
-                    create_playlist_from_ids(name, track_ids)
-                created[0] += 1
-                logger.info(
-                    "The %s playlist '%s' was upserted on %s with %d tracks.",
-                    label, name, server_name, len(track_ids),
-                )
-                return name
+                users, listening = playlist_users_for(server)
+                if needs_listening and not listening:
+                    users = []
+                if not users:
+                    return upsert(build_ids(False), server_name)
+                names = []
+                for user in users:
+                    where = f"user '{user['name']}' on {server_name}"
+                    current[0] = f"the {label} for {where}"
+                    with playlist_user_scope(user):
+                        names.append(upsert(build_ids(listening), where))
+                return names
 
         def on_server(index, total, _server, server_name):
             report(

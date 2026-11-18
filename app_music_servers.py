@@ -50,7 +50,7 @@ from app_server_context import (
     servers_for_ui,
 )
 from tasks import provider_probe
-from tasks.mediaserver import registry
+from tasks.mediaserver import list_playlist_users, registry
 from error.error_dictionary import (
     ERR_DEFAULT_SERVER_DELETE,
     ERR_FORBIDDEN,
@@ -480,6 +480,9 @@ def update_server(server_id):
             ERR_INVALID_REQUEST,
             f"A server named '{new_name}' already exists; names must be unique.",
         )
+    playlist_users = data.get('playlist_users')
+    if playlist_users is not None and not isinstance(playlist_users, list):
+        return json_error(ERR_INVALID_REQUEST, "playlist_users must be a list.")
     creds = None
     if 'creds' in data and isinstance(data['creds'], dict):
         creds = merge_creds(existing['creds'], data['creds'])
@@ -502,9 +505,13 @@ def update_server(server_id):
         server_type=server_type,
         creds=creds,
         music_libraries=data.get('music_libraries'),
+        playlist_users=playlist_users,
     )
     sweep_task_id = None
-    restart_acknowledged = _apply_default_to_config() if is_default else True
+    config_changed = any(
+        value is not None for value in (new_name, server_type, creds, data.get('music_libraries'))
+    )
+    restart_acknowledged = _apply_default_to_config() if is_default and config_changed else True
     # Sweep only on changes that can alter track matching; renames never
     # re-match the catalogue.
     new_libraries = data.get('music_libraries')
@@ -600,6 +607,44 @@ def server_libraries():
     except Exception:
         logger.exception("Media server list libraries failed")
         return jsonify({"libraries": [], "unsupported": True}), 200
+
+
+@music_servers_bp.route('/api/servers/<server_id>/users', methods=['GET'])
+def server_users(server_id):
+    """
+    Media-server users for per-user playlists.
+    ---
+    tags:
+      - Music Servers
+    summary: List the users of a media server and whether its configured account is an admin.
+    description: Per-user playlists are available when `supported` and `admin` are both true. `listening` tells whether the server reports each user's play counts, which personalise the playlists.
+    parameters:
+      - name: server_id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        description: The users, with the `supported`, `admin` and `listening` flags.
+      403:
+        description: The caller is not an AudioMuse-AI admin.
+      404:
+        description: Unknown server.
+    """
+    forbidden = _forbid_non_admin()
+    if forbidden:
+        return forbidden
+    server = registry.get_server(server_id)
+    if server is None:
+        return json_error(ERR_NOT_FOUND, "Unknown server.")
+    try:
+        with registry.bind(server):
+            result = list_playlist_users()
+    except Exception:
+        logger.exception("Listing the users of server %s failed", sanitize_log_value(server_id))
+        result = {'supported': True, 'admin': False, 'listening': False, 'users': [], 'error': 'The server could not be reached.'}
+    result['selected'] = server.get('playlist_users') or []
+    return jsonify(result)
 
 
 @music_servers_bp.route('/api/servers/align', methods=['POST'])

@@ -24,6 +24,7 @@ import config
 from . import context
 
 from .helper import detect_path_format, detect_download_extension, is_auth_error
+from .helper import playlist_users_from_jellyfin_users
 from .helper import select_best_artist as _select_best_artist
 
 logger = logging.getLogger(__name__)
@@ -170,6 +171,17 @@ def resolve_user(identifier, token):
     logger.info(f"No username match for '{identifier}'. Assuming it is a User ID.")
     return identifier
 
+
+
+def list_playlist_users():
+    users = _emby_get_users(_emby_token())
+    if users is None:
+        return {'supported': True, 'admin': False, 'listening': True, 'users': [], 'error': 'The Emby user list could not be read.'}
+    return playlist_users_from_jellyfin_users(users, _emby_user_id())
+
+
+def playlist_user_creds(user):
+    return {'user_id': user['id']}
 
 def get_recent_albums(limit):
     if limit == 0:

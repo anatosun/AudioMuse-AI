@@ -426,6 +426,7 @@ def server_public_dict(server):
         'creds': mask_creds(server['creds']),
         'music_libraries': server['music_libraries'],
         'is_default': server['is_default'],
+        'playlist_users': server.get('playlist_users') or [],
     }
 
 

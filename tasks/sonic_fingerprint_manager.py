@@ -41,14 +41,14 @@ def run_sonic_fingerprint_task(server_scope="all", inline_task_id=None):
     from config import SONIC_FINGERPRINT_CRON_PLAYLIST_NAME
     from .task_run import run_playlist_task_per_server
 
-    def build_ids():
+    def build_ids(_personal):
         found = generate_sonic_fingerprint()
         return [row['item_id'] for row in (found or []) if 'item_id' in row]
 
     return run_playlist_task_per_server(
         'sonic_fingerprint', 'sonic fingerprint',
         SONIC_FINGERPRINT_CRON_PLAYLIST_NAME, 'Sonic Fingerprint',
-        build_ids, server_scope, inline_task_id,
+        build_ids, server_scope, inline_task_id, needs_listening=True,
     )
 
 

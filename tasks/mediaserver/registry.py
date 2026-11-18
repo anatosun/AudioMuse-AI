@@ -124,14 +124,24 @@ def normalize_row(row):
         "creds": dict(row["creds"] or {}),
         "music_libraries": row["music_libraries"] or "",
         "is_default": bool(row["is_default"]),
+        "playlist_users": _playlist_users(row.get("playlist_users") if hasattr(row, "get") else None),
     }
+
+
+def _playlist_users(value):
+    """The media-server users chosen for per-user playlists, as ``[{'id', 'name'}]``."""
+    users = []
+    for user in value or []:
+        if isinstance(user, dict) and user.get("id"):
+            users.append({"id": str(user["id"]), "name": str(user.get("name") or user["id"])})
+    return users
 
 
 def _rows(db, where="", params=()):
     cur = db.cursor(cursor_factory=DictCursor)
     try:
         cur.execute(
-            "SELECT server_id, name, server_type, creds, music_libraries, is_default "
+            "SELECT server_id, name, server_type, creds, music_libraries, is_default, playlist_users "
             "FROM music_servers " + where,
             params,
         )
@@ -393,7 +403,7 @@ def add_server(name, server_type, creds, music_libraries="", make_default=False,
 
 
 def update_server(server_id, name=None, server_type=None, creds=None,
-                  music_libraries=None, conn=None):
+                  music_libraries=None, playlist_users=None, conn=None):
     db = conn or get_db()
     sets, params = [], []
     if name is not None:
@@ -408,6 +418,9 @@ def update_server(server_id, name=None, server_type=None, creds=None,
     if music_libraries is not None:
         sets.append("music_libraries = %s")
         params.append(music_libraries)
+    if playlist_users is not None:
+        sets.append("playlist_users = %s")
+        params.append(Json(_playlist_users(playlist_users)))
     if not sets:
         return
     sets.append("updated_at = now()")

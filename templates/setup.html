@@ -509,6 +509,17 @@
                     <button type="button" id="ms-add-btn">+ Add server</button>
                     <button type="button" id="ms-align-btn">Align music servers</button>
                 </div>
+                <div id="ms-users-panel" style="display:none; margin-top:1rem; border:1px solid var(--border-color, #ccc); border-radius:8px; padding:1rem;">
+                    <h4 id="ms-users-title" style="margin-top:0;">Playlist users</h4>
+                    <p style="margin-top:0; opacity:0.85; font-size:0.9rem;">Each chosen user gets their own clustering playlists, Sonic Fingerprint and Album of the Week, owned by them. With no user chosen, the configured account gets one shared set. This needs the configured account to be an admin on the server.</p>
+                    <p id="ms-users-note" style="display:none; opacity:0.85; font-size:0.9rem;"></p>
+                    <div id="ms-users-list" style="display:flex; flex-direction:column; gap:0.25rem;"></div>
+                    <div style="margin-top:0.75rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+                        <button type="button" id="ms-users-save-btn">Save users</button>
+                        <button type="button" id="ms-users-cancel-btn">Close</button>
+                    </div>
+                    <p id="ms-users-feedback" class="inline-feedback" style="display:none; margin-top:0.5rem;"></p>
+                </div>
                 <div id="music-server-form" style="display:none; margin-top:1rem; border:1px solid var(--border-color, #ccc); border-radius:8px; padding:1rem;">
                     <h3 id="music-server-form-title" style="margin-top:0;">Add a server</h3>
                     <input type="hidden" id="ms-edit-id" value="">

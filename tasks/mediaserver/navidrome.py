@@ -23,6 +23,8 @@ import logging
 import os
 import random
 import re
+import threading
+import time
 import config
 from . import context
 
@@ -32,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 REQUESTS_TIMEOUT = 300
 NAVIDROME_API_BATCH_SIZE = 40
+NATIVE_TOKEN_TTL_SECONDS = 3600
+_NATIVE_TOKENS = {}
+_NATIVE_TOKENS_LOCK = threading.Lock()
 
 
 def _get_target_music_folder_ids(user_creds=None):
@@ -201,6 +206,124 @@ def _navidrome_request_ex(
         safe = _redact_navidrome_secrets(e)
         logger.error(f"Unexpected error handling Navidrome response for '{endpoint}': {safe}")  # noqa: TRY400
         return None, {'kind': 'server', 'message': safe}
+
+
+def _active_values(user_creds=None):
+    creds = context.active_creds(user_creds)
+    if creds is None:
+        return {
+            'url': config.NAVIDROME_URL,
+            'user': config.NAVIDROME_USER,
+            'password': config.NAVIDROME_PASSWORD,
+            'api_key': config.NAVIDROME_API_KEY,
+        }
+    return creds
+
+
+def _native_login(user_creds=None):
+    """Log in to the Navidrome admin API and return ``(base_url, session)`` or ``(base_url, None)``.
+
+    ``session`` is ``{'token', 'is_admin'}``. Navidrome limits the login rate, so a session is kept for ``NATIVE_TOKEN_TTL_SECONDS``. The admin API needs a user name and password; an API key cannot log in.
+    """
+    values = _active_values(user_creds)
+    base_url = (values.get('url') or '').rstrip('/')
+    user, password = values.get('user') or '', values.get('password') or ''
+    if not base_url or not user or not password:
+        return base_url, None
+    key = (base_url, user, password)
+    with _NATIVE_TOKENS_LOCK:
+        cached = _NATIVE_TOKENS.get(key)
+        if cached and cached['expires'] > time.monotonic():
+            return base_url, cached
+        try:
+            r = requests.post(
+                f"{base_url}/auth/login",
+                json={'username': user, 'password': password},
+                timeout=REQUESTS_TIMEOUT,
+            )
+            r.raise_for_status()
+            body = r.json()
+        except Exception as e:
+            logger.error(f"Navidrome admin API login failed: {_redact_navidrome_secrets(e)}")  # noqa: TRY400
+            return base_url, None
+        if not body.get('token'):
+            return base_url, None
+        session = {
+            'token': body['token'],
+            'is_admin': bool(body.get('isAdmin')),
+            'expires': time.monotonic() + NATIVE_TOKEN_TTL_SECONDS,
+        }
+        _NATIVE_TOKENS[key] = session
+        return base_url, session
+
+
+def _native_headers(session):
+    return {'X-ND-Authorization': f"Bearer {session['token']}"}
+
+
+def list_playlist_users():
+    base_url, session = _native_login()
+    if session is None:
+        return {
+            'supported': True, 'admin': False, 'listening': False, 'users': [],
+            'error': 'Per-user playlists on Navidrome need the user name and password of an admin; an API key cannot log in to the Navidrome admin API.',
+        }
+    if not session['is_admin']:
+        return {'supported': True, 'admin': False, 'listening': False, 'users': []}
+    r = requests.get(f"{base_url}/api/user", headers=_native_headers(session), timeout=REQUESTS_TIMEOUT)
+    r.raise_for_status()
+    users = [
+        {'id': str(u['id']), 'name': u.get('userName') or str(u['id'])}
+        for u in r.json() or []
+        if u.get('id')
+    ]
+    return {'supported': True, 'admin': True, 'listening': False, 'users': users}
+
+
+def playlist_user_creds(user):
+    return {'playlist_owner_id': user['id'], 'playlist_owner_name': user['name']}
+
+
+def playlist_owner(user_creds=None):
+    """The user name that owns the playlists the active account writes, or None when it is not known."""
+    values = _active_values(user_creds)
+    if values.get('playlist_owner_name'):
+        return values['playlist_owner_name']
+    if values.get('api_key'):
+        return None
+    return values.get('user') or None
+
+
+def _owner_scope(user_creds=None):
+    values = _active_values(user_creds)
+    return values.get('playlist_owner_id') or None
+
+
+def _public_params(user_creds=None):
+    """Shared playlists are public; playlists made for one user stay private to that user."""
+    return {} if _owner_scope(user_creds) else {"public": "true"}
+
+
+def _give_to_owner(playlist_id, user_creds=None):
+    owner_id = _owner_scope(user_creds)
+    if not owner_id:
+        return True
+    base_url, session = _native_login(user_creds)
+    if session is None:
+        logger.error(f"Navidrome: cannot give playlist {playlist_id} to its user; the admin API login failed.")
+        return False
+    try:
+        r = requests.put(
+            f"{base_url}/api/playlist/{playlist_id}",
+            headers=_native_headers(session),
+            json={'id': playlist_id, 'ownerId': owner_id},
+            timeout=REQUESTS_TIMEOUT,
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        logger.error(f"Navidrome: giving playlist {playlist_id} to user {owner_id} failed: {_redact_navidrome_secrets(e)}")  # noqa: TRY400
+        return False
 
 
 def _navidrome_request(
@@ -586,7 +709,7 @@ def _add_to_playlist(playlist_id, item_ids, user_creds=None):
         params = {
             "playlistId": playlist_id,
             "songIdToAdd": batch_ids,
-            "public": "true",
+            **_public_params(user_creds),
         }
 
         response = _navidrome_request(
@@ -639,7 +762,7 @@ def _create_playlist_batched(playlist_name, item_ids, user_creds=None, descripti
         f"Created Navidrome playlist '{playlist_name}' (ID: {new_playlist_id}) with the first {len(ids_for_creation)} songs."
     )
 
-    update_params = {"playlistId": new_playlist_id, "public": "true"}
+    update_params = {"playlistId": new_playlist_id, **_public_params(user_creds)}
     if description:
         update_params["comment"] = description
     update_response = _navidrome_request(
@@ -674,6 +797,13 @@ def _create_playlist_batched(playlist_name, item_ids, user_creds=None, descripti
                 )
             return None
 
+    if not _give_to_owner(new_playlist_id, user_creds):
+        logger.error(
+            f"Deleting Navidrome playlist '{playlist_name}' (ID: {new_playlist_id}); it could not be given to its user."
+        )
+        _navidrome_request("deletePlaylist", {"id": new_playlist_id}, method='post', user_creds=user_creds)
+        return None
+
     new_playlist['Id'] = new_playlist.get('id')
     new_playlist['Name'] = new_playlist.get('name')
 
@@ -688,7 +818,13 @@ def get_all_playlists():
     response = _navidrome_request("getPlaylists")
     if response and "playlists" in response and "playlist" in response["playlists"]:
         return [
-            {**p, 'Id': p.get('id'), 'Name': p.get('name'), 'Description': p.get('comment') or ''}
+            {
+                **p,
+                'Id': p.get('id'),
+                'Name': p.get('name'),
+                'Description': p.get('comment') or '',
+                'Owner': p.get('owner'),
+            }
             for p in response["playlists"]["playlist"]
         ]
     return []
@@ -756,7 +892,10 @@ def get_playlist_by_name(playlist_name, user_creds=None):
     if not (response and "playlists" in response and "playlist" in response["playlists"]):
         return None
 
+    owner = playlist_owner(user_creds)
     for playlist_summary in response["playlists"]["playlist"]:
+        if owner and playlist_summary.get("owner") and playlist_summary["owner"] != owner:
+            continue
         if playlist_summary.get("name") == playlist_name:
             return playlist_summary
 

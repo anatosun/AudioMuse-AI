@@ -115,3 +115,22 @@ def detect_path_format(tracks):
     if ratio <= 0.2:
         return 'relative'
     return 'mixed'
+
+
+def playlist_users_from_jellyfin_users(users, configured_user):
+    """Per-user playlist info from a Jellyfin or Emby ``/Users`` listing.
+
+    ``configured_user`` is the configured user id or name; the listing tells whether that user is an administrator.
+    """
+    configured = str(configured_user or '').lower()
+    admin = False
+    listed = []
+    for user in users or []:
+        user_id = str(user.get('Id') or '')
+        name = user.get('Name') or user_id
+        if not user_id:
+            continue
+        if configured in (user_id.lower(), name.lower()):
+            admin = bool((user.get('Policy') or {}).get('IsAdministrator'))
+        listed.append({'id': user_id, 'name': name})
+    return {'supported': True, 'admin': admin, 'listening': True, 'users': listed if admin else []}

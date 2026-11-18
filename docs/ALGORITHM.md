@@ -1161,6 +1161,14 @@ Finally a Fisher-Yates shuffle randomizes the order, playlists larger than `MAX_
 
 The playlist name carries no marker. Each playlist gets the description "Weekly mix by AudioMuse-AI – refreshed <date>": the `Overview` on Jellyfin and Emby, the `comment` on Navidrome and the `summary` on Plex. The cleanup deletes the playlists whose description starts with "Weekly mix by AudioMuse-AI", the playlists whose name ends in `_automatic` (created before the description), and the playlists without a description whose name the last run recorded in the `playlist` table. Lyrion playlists have no description, so on Lyrion the recorded names alone identify them.
 
+#### Per-user playlists
+
+Setup → Music servers → Playlist users chooses users of a Jellyfin, Emby or Navidrome server. The list is available when the configured account is an admin on that server, and every run checks this again; otherwise the configured account gets one shared set. Each chosen user gets their own clustering playlists, Sonic Fingerprint and Album of the Week, owned by them, and the cleanup deletes only that user's playlists.
+
+- Jellyfin and Emby report each user's play counts to the admin. A user gets the `PER_USER_CLUSTERING_PLAYLISTS` clustering playlists whose mean embedding is closest to the mean embedding of the user's most-played songs (all of them when the user has no plays), a Sonic Fingerprint from their own plays, and an Album of the Week seeded from one of their most-played songs.
+- Navidrome shows each user's play counts only to that user. A user gets every clustering playlist and an Album of the Week from a random seed, and the Sonic Fingerprint stays shared. The admin creates each playlist and gives it to the user through the Navidrome admin API, which needs the admin's user name and password; an API key cannot log in to it. The playlists of a user are private.
+- Plex and Lyrion keep one shared set.
+
 #### Re-running the clustering
 
 Clustering is idempotent at the output level. Every run deletes the playlists of the previous run and creates the new set, so a re-run replaces the previous set. There are no clustering tables to drop. It only

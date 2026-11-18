@@ -47,6 +47,7 @@ Main Features:
 
 import logging
 import math
+import random
 import re
 from collections import Counter
 from datetime import date
@@ -1438,8 +1439,20 @@ def weekly_seed_ids(today=None):
     return [item_id for item_id, _duration in clean]
 
 
-def create_album_of_the_week():
-    for item_id in weekly_seed_ids():
+def create_album_of_the_week(personal=False):
+    """Grow the album of the week from a seed song.
+
+    With ``personal``, the bound user's most-played songs are tried first as seeds, in random order, so each user gets an album around their own listening.
+    """
+    seeds = weekly_seed_ids()
+    if personal:
+        from .playlist_users import top_song_ids
+
+        favourites = top_song_ids()
+        random.shuffle(favourites)
+        taken = set(favourites)
+        seeds = favourites + [item_id for item_id in seeds if item_id not in taken]
+    for item_id in seeds:
         try:
             return create_album(SEED_SONG, item_id=item_id)
         except AlbumSeedError:
@@ -1451,8 +1464,8 @@ def run_album_of_the_week_task(server_scope="all", inline_task_id=None):
     from config import ALBUM_OF_THE_WEEK_PLAYLIST_NAME
     from .task_run import run_playlist_task_per_server
 
-    def build_ids():
-        album = create_album_of_the_week()
+    def build_ids(personal):
+        album = create_album_of_the_week(personal)
         if not album:
             return []
         logger.info("The album of the week grew from seed %s.", album['seed']['label'])

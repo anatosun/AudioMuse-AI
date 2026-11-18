@@ -19,6 +19,7 @@ Main Features:
   live in http.py and helper.py.
 """
 
+import contextlib
 import datetime
 import logging
 import os
@@ -46,6 +47,7 @@ _PUBLIC_SERVER_API = (
     'list_libraries', 'search_albums', 'test_connection', 'get_playlist_by_name',
     'get_all_playlists', 'get_playlist_track_ids', 'create_playlist', 'create_instant_playlist',
     'create_or_replace_playlist', 'get_top_played_songs', 'get_last_played_time', 'get_lyrics',
+    'list_playlist_users',
 )
 
 
@@ -124,13 +126,16 @@ def _is_automatic_playlist(playlist, last_run_names):
 def delete_automatic_playlists(last_run_names=()):
     """Delete the playlists created by clustering on the active server.
 
-    A clustering playlist has a description that starts with ``AUTOMATIC_PLAYLIST_MARKER``. A playlist from before the description has a name that ends in ``LEGACY_AUTOMATIC_SUFFIX``. Lyrion stores no description, and a description write can fail on the other servers, so a playlist without a description is also deleted when its name is in ``last_run_names``, the names the previous clustering run recorded for this server.
+    Where the server reports playlist owners, only the playlists of the active account (or of the user bound by ``playlist_user_scope``) are deleted. A clustering playlist has a description that starts with ``AUTOMATIC_PLAYLIST_MARKER``. A playlist from before the description has a name that ends in ``LEGACY_AUTOMATIC_SUFFIX``. Lyrion stores no description, and a description write can fail on the other servers, so a playlist without a description is also deleted when its name is in ``last_run_names``, the names the previous clustering run recorded for this server.
     """
     last_run_names = set(last_run_names or ())
     deleted_count = 0
     provider = _provider()
     if provider is not None:
+        owner = provider.playlist_owner() if hasattr(provider, 'playlist_owner') else None
         for p in provider.get_all_playlists():
+            if owner and p.get('Owner') and p['Owner'] != owner:
+                continue
             if not _is_automatic_playlist(p, last_run_names):
                 continue
             playlist_id = p.get('Id') or p.get('id')
@@ -142,6 +147,67 @@ def delete_automatic_playlists(last_run_names=()):
                     f"Failed to delete playlist {playlist_id}; continuing with the remaining playlists."
                 )
     logger.info(f"Deleted {deleted_count} automatic playlists.")
+
+
+def list_playlist_users():
+    """The users of the active server for per-user playlists.
+
+    Returns ``{'supported', 'admin', 'listening', 'users'}``: ``supported`` is true for the servers that can create playlists for other users, ``admin`` tells whether the configured account is an admin there, ``listening`` tells whether the admin can read each user's play counts, and ``users`` lists ``{'id', 'name'}``.
+    """
+    provider = _provider()
+    if provider is None or not hasattr(provider, 'list_playlist_users'):
+        return {'supported': False, 'admin': False, 'listening': False, 'users': []}
+    return provider.list_playlist_users()
+
+
+def playlist_users_for(server):
+    """The users chosen for per-user playlists on ``server`` and whether their play counts are readable.
+
+    Call it inside ``registry.bind(server)``. Returns ``([], False)`` when no user is chosen, when the server cannot create playlists for other users, or when its configured account is not an admin. Chosen users that no longer exist on the server are left out.
+    """
+    chosen = (server or {}).get('playlist_users') or []
+    if not chosen:
+        return [], False
+    try:
+        info = list_playlist_users()
+    except Exception:
+        logger.exception("Could not list the users of server '%s'; creating shared playlists", (server or {}).get('name'))
+        return [], False
+    if not (info.get('supported') and info.get('admin')):
+        logger.warning(
+            "Per-user playlists are chosen on server '%s', but its configured account is not an admin there; creating shared playlists.",
+            (server or {}).get('name'),
+        )
+        return [], False
+    names = {u['id']: u['name'] for u in info.get('users') or []}
+    users = [{'id': u['id'], 'name': names[u['id']]} for u in chosen if u.get('id') in names]
+    return users, bool(info.get('listening'))
+
+
+@contextlib.contextmanager
+def playlist_user_scope(user):
+    """Run the provider calls in the block as the media-server user ``user`` (``{'id', 'name'}``).
+
+    The active server is bound again with credentials that name the user: on Jellyfin and Emby the user's id replaces the configured user id, so play counts and playlists are the user's; on Navidrome the playlists are created by the admin and given to the user.
+    """
+    from . import registry
+
+    provider = _provider()
+    base = context.active_server()
+    if not base or not base.get('creds'):
+        base = registry.get_server(context.active_server_id()) or registry.get_default_server()
+    if not base:
+        server_type = context.active_type(config.MEDIASERVER_TYPE)
+        base = {
+            'server_id': None,
+            'server_type': server_type,
+            'creds': registry.creds_from_config(server_type),
+            'music_libraries': config.MUSIC_LIBRARIES,
+        }
+    scoped = dict(base)
+    scoped['creds'] = {**(base.get('creds') or {}), **provider.playlist_user_creds(user)}
+    with use_server(scoped):
+        yield scoped
 
 
 def get_recent_albums(limit):

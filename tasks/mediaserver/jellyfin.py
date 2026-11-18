@@ -25,6 +25,7 @@ from . import context
 from config import jellyfin_auth_header
 
 from .helper import detect_path_format, detect_download_extension, is_auth_error
+from .helper import playlist_users_from_jellyfin_users
 from .helper import select_best_artist as _select_best_artist
 
 logger = logging.getLogger(__name__)
@@ -120,10 +121,13 @@ def _jellyfin_base_url(user_creds=None):
     return (creds.get('url') if creds and creds.get('url') else config.JELLYFIN_URL).rstrip('/')
 
 
-def _jellyfin_headers_from_creds(user_creds=None):
+def _jellyfin_token(user_creds=None):
     creds = context.active_creds(user_creds)
-    token = (creds.get('token') if creds else None) or config.JELLYFIN_TOKEN
-    return jellyfin_auth_header(token)
+    return (creds.get('token') if creds else None) or config.JELLYFIN_TOKEN
+
+
+def _jellyfin_headers_from_creds(user_creds=None):
+    return jellyfin_auth_header(_jellyfin_token(user_creds))
 
 
 def _jellyfin_user_id(user_creds=None):
@@ -154,6 +158,17 @@ def resolve_user(identifier, token):
     logger.info(f"No username match for '{identifier}'. Assuming it is a User ID.")
     return identifier
 
+
+
+def list_playlist_users():
+    users = _jellyfin_get_users(_jellyfin_token())
+    if users is None:
+        return {'supported': True, 'admin': False, 'listening': True, 'users': [], 'error': 'The Jellyfin user list could not be read.'}
+    return playlist_users_from_jellyfin_users(users, _jellyfin_user_id())
+
+
+def playlist_user_creds(user):
+    return {'user_id': user['id']}
 
 def get_recent_albums(limit):
     target_library_ids = _get_target_library_ids()
