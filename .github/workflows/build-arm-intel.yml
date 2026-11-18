@@ -13,6 +13,7 @@ on:
   push:
     branches:
       - main          # Trigger on merge/push to main -> 'devel' tag
+      - 'test/**'     # Test branches -> tag named after the branch
     tags:
       - 'v*.*.*'      # Trigger for version tags like v1.0.0
   pull_request:
@@ -73,6 +74,10 @@ jobs:
             TAGS="pr-${PR_NUM}"
             SUFFIX="pr-${PR_NUM}"
             echo "Building PR image tag: ${TAGS}"
+          elif [[ "${{ github.ref }}" == refs/heads/test/* ]]; then
+            BRANCH=$(echo "${{ github.ref_name }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')
+            TAGS="${BRANCH}"
+            SUFFIX="${BRANCH}"
           fi
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
           echo "suffix=${SUFFIX}" >> $GITHUB_OUTPUT
